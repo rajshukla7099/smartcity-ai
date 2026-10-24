@@ -2,7 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "🚀 1. Run SmartCity Platform [smartcity.py]",
+      "name": "🌐 1. Launch Public Internet Host [run_public_host.py]",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/run_public_host.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "🚀 2. Run SmartCity Platform [smartcity.py]",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/smartcity.py",
@@ -10,7 +18,7 @@
       "justMyCode": true
     },
     {
-      "name": "🚀 2. Run MultiCam AI Streamlit App [run_app.py]",
+      "name": "🚀 3. Run MultiCam AI Streamlit App [run_app.py]",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/run_app.py",
@@ -18,7 +26,7 @@
       "justMyCode": true
     },
     {
-      "name": "🧪 2. Run Test Suite (All 12 Unit Tests) [test_multicam.py]",
+      "name": "🧪 4. Run Test Suite (All 12 Unit Tests) [test_multicam.py]",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/tests/test_multicam.py",
@@ -26,18 +34,10 @@
       "justMyCode": true
     },
     {
-      "name": "🌐 3. Run React/Flask Web Server [main.py]",
+      "name": "🌐 5. Run React/Flask Web Server [main.py]",
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "📷 4. Run Single-File Re-ID Engine [standalone_reid_engine.py]",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/standalone_reid_engine.py",
       "console": "integratedTerminal",
       "justMyCode": true
     }

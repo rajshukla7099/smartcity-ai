@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "🚀 1. Start MultiCam AI Streamlit App",
+      "label": "🌐 1. Launch Public Internet Host",
       "type": "shell",
-      "command": "python run_app.py",
+      "command": "python run_public_host.py",
       "problemMatcher": [],
       "group": {
         "kind": "build",
@@ -12,15 +12,15 @@
       }
     },
     {
-      "label": "🧪 2. Run Test Suite (6 Unit & Integration Tests)",
+      "label": "🚀 2. Start MultiCam AI Local App",
       "type": "shell",
-      "command": "python -m unittest tests/test_multicam.py",
+      "command": "python smartcity.py",
       "problemMatcher": []
     },
     {
-      "label": "🌐 3. Start React/Flask App (Port 5000)",
+      "label": "🧪 3. Run Test Suite (All 12 Tests)",
       "type": "shell",
-      "command": "python main.py",
+      "command": "python -m unittest tests/test_multicam.py",
       "problemMatcher": []
     }
   ]
