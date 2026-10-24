@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🚀 1. Start MultiCam AI Streamlit App",
+      "type": "shell",
+      "command": "python run_app.py",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "🧪 2. Run Test Suite (6 Unit & Integration Tests)",
+      "type": "shell",
+      "command": "python -m unittest tests/test_multicam.py",
+      "problemMatcher": []
+    },
+    {
+      "label": "🌐 3. Start React/Flask App (Port 5000)",
+      "type": "shell",
+      "command": "python main.py",
+      "problemMatcher": []
+    }
+  ]
+}

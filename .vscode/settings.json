@@ -1,0 +1,9 @@
+{
+  "code-runner.runInTerminal": true,
+  "code-runner.clearPreviousOutput": true,
+  "code-runner.saveFileBeforeRun": true,
+  "code-runner.executorMap": {
+    "python": "streamlit run"
+  },
+  "python.terminal.executeInFileDir": true
+}

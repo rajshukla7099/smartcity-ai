@@ -1,0 +1,32 @@
+{
+  "corridor_name": "Junction 4th Ave to Junction 5th Ave Urban Corridor",
+  "baseline_distance_meters": 850.0,
+  "nominal_speed_kmh": 55.0,
+  "min_speed_kmh": 15.0,
+  "max_speed_kmh": 95.0,
+  "confidence_threshold": 0.55,
+  "privacy_k_anonymity": 10,
+  "cameras": [
+    {
+      "camera_id": "CAM-01",
+      "name": "Camera A (North Approach Ingress)",
+      "location": "Junction 4th Ave & Ring Road",
+      "elevation_angle_deg": 18,
+      "fps": 25.0
+    },
+    {
+      "camera_id": "CAM-02",
+      "name": "Camera B (South Exit Egress)",
+      "location": "Junction 5th Ave & Ring Road (+850m)",
+      "elevation_angle_deg": 22,
+      "fps": 25.0
+    },
+    {
+      "camera_id": "CAM-03",
+      "name": "Camera C (Unseen Zero-Shot Node)",
+      "location": "Junction 6th Ave Outer Ring (+1600m)",
+      "elevation_angle_deg": 15,
+      "fps": 30.0
+    }
+  ]
+}

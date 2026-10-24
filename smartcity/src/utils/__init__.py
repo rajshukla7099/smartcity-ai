@@ -1,0 +1,1 @@
+from .video_generator import generate_corridor_video
