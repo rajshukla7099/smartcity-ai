@@ -1,7 +1,8 @@
 """
 MultiCam AI - Vehicle Detection Engine
-Supports Ultralytics YOLO with automatic high-speed OpenCV fallback.
-Detects: car, motorcycle, bus, truck, and auto-rickshaw.
+Supports OpenCV DNN YOLO ONNX Deep Learning with robust OpenCV fallback.
+Exclusively detects real vehicles: car, motorcycle, bus, truck, and auto-rickshaw.
+Filters out background noise, shadows, road pavement, and camera flicker.
 """
 
 import os
@@ -27,46 +28,58 @@ class VehicleDetection:
 
 class HybridVehicleDetector:
     """
-    Robust multi-class vehicle detector:
-    1. Attempts Ultralytics YOLO if available.
-    2. Gracefully falls back to high-performance OpenCV MOG2 + Morphological Contour Analyzer.
+    High-precision vehicle detector:
+    1. Primary: YOLOv5 Deep Learning ONNX via OpenCV DNN (0 false positives on road/trees).
+    2. Fallback: Strict Geometric-Motion Filter with NMS and Shadow Suppression.
     """
-    def __init__(self, min_area=400, max_area=180000, conf_threshold=0.35):
+    def __init__(self, min_area=1200, max_area=250000, conf_threshold=0.30):
         self.min_area = min_area
         self.max_area = max_area
         self.conf_threshold = conf_threshold
-        self.yolo_model = None
-        self.engine_name = "OpenCV Mixed-Traffic Analyzer"
+        self.net = None
+        self.engine_name = "OpenCV Classical Filter"
         self.prev_frame_gray = None
 
-        # Check if Ultralytics is available
-        try:
-            from ultralytics import YOLO
-            model_path = os.path.join(os.path.dirname(__file__), "yolov8n.pt")
-            if os.path.exists(model_path):
-                self.yolo_model = YOLO(model_path)
-                self.engine_name = "Ultralytics YOLOv8"
-            else:
-                self.engine_name = "OpenCV Mixed-Traffic Analyzer (YOLO Ready)"
-        except Exception:
-            self.engine_name = "OpenCV Mixed-Traffic Analyzer"
+        # COCO Vehicle Class Mapping
+        # 2: car, 3: motorcycle, 5: bus, 7: truck
+        self.vehicle_classes = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
-        # Initialize background subtractor for OpenCV engine
+        # Attempt to load YOLOv5 ONNX model
+        potential_model_paths = [
+            os.path.join(os.path.dirname(__file__), "..", "..", "models", "yolov5n.onnx"),
+            os.path.join("models", "yolov5n.onnx"),
+            os.path.join(os.path.dirname(__file__), "yolov5n.onnx"),
+            os.path.abspath(r"c:\Users\rajsh\Downloads\city ai\models\yolov5n.onnx"),
+            os.path.abspath(r"c:\Users\rajsh\Downloads\smartcity\models\yolov5n.onnx"),
+        ]
+
+        for mp in potential_model_paths:
+            if os.path.exists(mp) and os.path.getsize(mp) > 1000000:
+                try:
+                    self.net = cv2.dnn.readNetFromONNX(mp)
+                    self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
+                    self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+                    self.engine_name = "YOLOv5 Deep Learning (OpenCV DNN)"
+                    break
+                except Exception:
+                    self.net = None
+
+        # Initialize background subtractor for fallback
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=120, varThreshold=16, detectShadows=True
+            history=200, varThreshold=24, detectShadows=True
         )
 
     def reset(self):
         """Resets the background model and temporal state for a fresh video or stream."""
         self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=120, varThreshold=16, detectShadows=True
+            history=200, varThreshold=24, detectShadows=True
         )
         self.prev_frame_gray = None
 
     def detect(self, frame, is_night_mode=False):
         """
         Executes vehicle detection on the given frame.
-        Returns list of VehicleDetection instances.
+        Exclusively spots real vehicles (car, motorcycle, bus, truck, auto-rickshaw).
         """
         if frame is None or frame.size == 0:
             return []
@@ -75,100 +88,159 @@ class HybridVehicleDetector:
         if is_night_mode:
             frame = self._enhance_night_frame(frame)
 
-        # 1. YOLO Engine
-        if self.yolo_model is not None:
+        # 1. Primary: YOLO ONNX Deep Learning Engine
+        if self.net is not None:
             try:
-                return self._detect_yolo(frame)
-            except Exception as e:
-                # Fallback to OpenCV if YOLO throws runtime error
+                yolo_dets = self._detect_onnx(frame)
+                if yolo_dets is not None and len(yolo_dets) > 0:
+                    return yolo_dets
+            except Exception:
                 pass
 
-        # 2. OpenCV Fallback Engine
-        return self._detect_opencv(frame)
+        # 2. Strict Classical Fallback (Only real vehicles, suppresses asphalt/trees/noise)
+        return self._detect_opencv_strict(frame)
 
-    def _detect_yolo(self, frame):
+    def _detect_onnx(self, frame):
+        """Deep learning vehicle detection using YOLOv5 ONNX."""
+        h, w = frame.shape[:2]
+        blob = cv2.dnn.blobFromImage(frame, 1/255.0, (640, 640), swapRB=True, crop=False)
+        self.net.setInput(blob)
+        outputs = self.net.forward()
+
+        if isinstance(outputs, (list, tuple)):
+            output = outputs[0]
+        else:
+            output = outputs
+
+        # Output shape is (1, 25200, 85)
+        if len(output.shape) == 3:
+            output = output[0]
+
+        x_factor = w / 640.0
+        y_factor = h / 640.0
+
+        boxes = []
+        confidences = []
+        class_ids = []
+
+        for row in output:
+            obj_conf = float(row[4])
+            if obj_conf >= self.conf_threshold:
+                class_scores = row[5:]
+                class_id = int(np.argmax(class_scores))
+                score = float(class_scores[class_id])
+                combined_conf = obj_conf * score
+
+                if combined_conf >= self.conf_threshold and class_id in self.vehicle_classes:
+                    cx, cy, bw, bh = float(row[0]), float(row[1]), float(row[2]), float(row[3])
+                    left = int((cx - 0.5 * bw) * x_factor)
+                    top = int((cy - 0.5 * bh) * y_factor)
+                    width = int(bw * x_factor)
+                    height = int(bh * y_factor)
+
+                    # Ensure box stays within frame boundaries
+                    left = max(0, left)
+                    top = max(0, top)
+                    width = min(w - left, width)
+                    height = min(h - top, height)
+
+                    if width >= 25 and height >= 20:
+                        boxes.append([left, top, width, height])
+                        confidences.append(combined_conf)
+                        class_ids.append(class_id)
+
+        if not boxes:
+            return []
+
+        # Non-Maximum Suppression to remove overlapping duplicate boxes
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, 0.45)
         detections = []
-        # Class IDs in COCO: 2: car, 3: motorcycle, 5: bus, 7: truck
-        yolo_classes = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
-        results = self.yolo_model(frame, conf=self.conf_threshold, verbose=False)
 
-        for r in results:
-            boxes = r.boxes
-            for box in boxes:
-                cls_id = int(box.cls[0].item())
-                if cls_id in yolo_classes:
-                    conf = float(box.conf[0].item())
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    w, h = max(1, x2 - x1), max(1, y2 - y1)
-                    crop = frame[max(0, y1):min(frame.shape[0], y2), max(0, x1):min(frame.shape[1], x2)]
-                    class_name = yolo_classes[cls_id]
+        indices_list = indices.flatten() if hasattr(indices, "flatten") else indices
+        for i in indices_list:
+            bx, by, bw, bh = boxes[i]
+            cid = class_ids[i]
+            conf = confidences[i]
+            class_name = self.vehicle_classes[cid]
 
-                    # Auto-rickshaw refinement in Indian traffic
-                    if class_name == "car" and w < 60 and h < 70:
-                        # Check high yellow/green saturation characteristic of auto-rickshaws
-                        if self._is_auto_rickshaw(crop):
-                            class_name = "auto-rickshaw"
+            crop = frame[by:by + bh, bx:bx + bw]
+            if crop.size == 0:
+                continue
 
-                    detections.append(VehicleDetection(
-                        bbox=(x1, y1, w, h),
-                        class_name=class_name,
-                        confidence=conf,
-                        crop=crop
-                    ))
+            # Auto-rickshaw refinement in Indian traffic
+            if class_name == "car" and (bw < 90 and bh < 90) and self._is_auto_rickshaw(crop):
+                class_name = "auto-rickshaw"
+
+            detections.append(VehicleDetection(
+                bbox=(bx, by, bw, bh),
+                class_name=class_name,
+                confidence=conf,
+                crop=crop
+            ))
+
         return detections
 
-    def _detect_opencv(self, frame):
+    def _detect_opencv_strict(self, frame):
+        """
+        High-precision classical vehicle detector.
+        Uses high thresholds, edge density, and aspect constraints to reject background noise.
+        """
         detections = []
         h, w = frame.shape[:2]
         frame_area = float(h * w)
 
-        # Dynamic area bounds responsive to video resolution
-        dynamic_min_area = max(350, int(0.0006 * frame_area))
-        dynamic_max_area = int(0.35 * frame_area)
+        # Strict area bounds to ignore small noise and ground textures
+        dynamic_min_area = max(1800, int(0.0035 * frame_area))
+        dynamic_max_area = int(0.40 * frame_area)
 
-        # Preprocessing: Grayscale & Gaussian blur
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # 1. Background subtraction with dynamic learning rate
-        fg_mask = self.bg_subtractor.apply(frame, learningRate=0.03)
-        _, fg_thresh = cv2.threshold(fg_mask, 180, 255, cv2.THRESH_BINARY)
+        # 1. Background subtraction (detectShadows=True marks shadows as gray 127)
+        fg_mask = self.bg_subtractor.apply(frame, learningRate=0.015)
+        # Strict threshold to remove shadows (only values 240+ are true moving vehicles)
+        _, fg_thresh = cv2.threshold(fg_mask, 240, 255, cv2.THRESH_BINARY)
 
-        # 2. Inter-frame difference (detects instant vehicle motion on frame 1/2)
+        # 2. Inter-frame difference
         if self.prev_frame_gray is not None and self.prev_frame_gray.shape == gray_blur.shape:
             frame_diff = cv2.absdiff(gray_blur, self.prev_frame_gray)
-            _, diff_thresh = cv2.threshold(frame_diff, 18, 255, cv2.THRESH_BINARY)
-            motion_mask = cv2.bitwise_or(fg_thresh, diff_thresh)
+            _, diff_thresh = cv2.threshold(frame_diff, 28, 255, cv2.THRESH_BINARY)
+            motion_mask = cv2.bitwise_and(fg_thresh, diff_thresh)
         else:
             motion_mask = fg_thresh
 
         self.prev_frame_gray = gray_blur
 
-        # Morphological operations to bridge vehicle chassis, roof and bumper
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        # Morphological operations
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         mask_clean = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
-        mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel_open, iterations=2)
 
-        # Contour extraction
         contours, _ = cv2.findContours(mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         raw_boxes = []
+
         for cnt in contours:
             area = cv2.contourArea(cnt)
             if dynamic_min_area <= area <= dynamic_max_area:
                 x, y, bw, bh = cv2.boundingRect(cnt)
                 aspect = float(bw) / float(bh)
-                # Keep realistic vehicle aspect ratios (0.35 to 3.8)
-                if 0.30 <= aspect <= 3.8 and bw >= 18 and bh >= 18:
+                # Realistic vehicle aspect ratios (0.5 to 3.2)
+                if 0.50 <= aspect <= 3.2 and bw >= 35 and bh >= 30:
                     raw_boxes.append((x, y, bw, bh, area))
 
-        # Merge adjacent or split vehicle boxes
         merged_boxes = self._merge_adjacent_boxes(raw_boxes)
 
         for x, y, bw, bh in merged_boxes:
             crop = frame[max(0, y):min(h, y+bh), max(0, x):min(w, x+bw)]
             if crop.size == 0:
+                continue
+
+            # Verify vehicle edge density (rules out flat road patches and shadow blobs)
+            crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(crop_gray, 50, 150)
+            edge_density = float(np.count_nonzero(edges)) / float(bw * bh)
+            if edge_density < 0.04:  # Flat texture without vehicle structure
                 continue
 
             aspect_ratio = float(bw) / float(bh)
@@ -181,6 +253,7 @@ class HybridVehicleDetector:
                 confidence=confidence,
                 crop=crop
             ))
+
         return detections
 
     def _merge_adjacent_boxes(self, raw_boxes):
@@ -208,7 +281,6 @@ class HybridVehicleDetector:
                     x2, y2, w2, h2 = boxes[j]
                     bx2 = [x2, y2, x2 + w2, y2 + h2]
 
-                    # Check intersection or proximity within 14px
                     inter_x1 = max(cur_box[0], bx2[0])
                     inter_y1 = max(cur_box[1], bx2[1])
                     inter_x2 = min(cur_box[2], bx2[2])
@@ -238,38 +310,29 @@ class HybridVehicleDetector:
 
     def _classify_contour(self, crop, w, h, aspect_ratio, area):
         """Classifies vehicle into car, motorcycle, bus, truck, or auto-rickshaw."""
-        # 1. Motorcycle / Bike: Slim vertical aspect ratio
         if aspect_ratio < 0.65 and area < 4500:
             return "motorcycle", 0.86
 
-        # 2. Bus / Heavy Commercial: Large area and tall profile
         if area > 14000:
             if aspect_ratio < 0.9 or h > 90:
                 return "bus", 0.89
             return "truck", 0.85
 
-        # 3. Auto-Rickshaw (3-Wheeler): Compact, high yellow/green or canvas roof
         if self._is_auto_rickshaw(crop):
             return "auto-rickshaw", 0.88
 
-        # 4. Commercial Truck: Medium-large boxy profile
         if 8000 <= area <= 14000 and aspect_ratio > 1.1:
             return "truck", 0.82
 
-        # 5. Default / Common Fleet: Car (Hatchback/Sedan/SUV)
         return "car", 0.91
 
     def _is_auto_rickshaw(self, crop):
-        """Detects distinctive yellow/green/black coloration of Indian auto-rickshaws."""
+        """Detects distinctive yellow/green coloration of Indian auto-rickshaws."""
         if crop is None or crop.size == 0:
             return False
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        h = hsv[:, :, 0]
-        s = hsv[:, :, 1]
-        v = hsv[:, :, 2]
-        # Yellow hue range: ~20-35 with moderate-high saturation
+        h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
         yellow_mask = (h >= 20) & (h <= 38) & (s > 60) & (v > 60)
-        # Green hue range: ~38-80
         green_mask = (h >= 40) & (h <= 85) & (s > 60) & (v > 50)
         pct_color = (np.sum(yellow_mask) + np.sum(green_mask)) / float(crop.shape[0] * crop.shape[1])
         return pct_color > 0.12

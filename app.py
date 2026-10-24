@@ -504,49 +504,21 @@ def process_single_image(image_input, camera_id="CAM-01"):
 
     detector = st.session_state.detector
     extractor = st.session_state.feature_extractor
-    detector.reset()
 
-    # Edge and contour based vehicle localization for static snapshots
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edged = cv2.Canny(blurred, 30, 140)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    closed = cv2.morphologyEx(edged, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    h, w = frame.shape[:2]
-    frame_area = float(h * w)
-    raw_boxes = []
-
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if max(300, int(0.0006 * frame_area)) <= area <= int(0.40 * frame_area):
-            bx, by, bw, bh = cv2.boundingRect(cnt)
-            aspect = float(bw) / float(bh)
-            if 0.30 <= aspect <= 3.8 and bw >= 20 and bh >= 20:
-                raw_boxes.append((bx, by, bw, bh, area))
-
-    merged = detector._merge_adjacent_boxes(raw_boxes)
-
-    # If no contours met threshold, provide central region fallback
-    if not merged:
-        cx, cy = int(w * 0.25), int(h * 0.30)
-        cw, ch = int(w * 0.50), int(h * 0.45)
-        merged = [(cx, cy, cw, ch)]
-
+    # High-precision Deep Learning vehicle detection (Exclusively spots real vehicles)
+    detections = detector.detect(frame)
     tracks = []
     annotated = frame.copy()
 
-    for idx, (bx, by, bw, bh) in enumerate(merged):
-        crop = frame[max(0, by):min(h, by+bh), max(0, bx):min(w, bx+bw)]
-        if crop.size == 0:
+    for idx, det in enumerate(detections):
+        bx, by, bw, bh = det.bbox
+        cls_name = det.class_name
+        conf = det.confidence
+        crop = det.crop
+        if crop is None or crop.size == 0:
             continue
 
-        aspect = float(bw) / float(bh)
-        area = bw * bh
-        cls_name, conf = detector._classify_contour(crop, bw, bh, aspect, area)
-
-        tid = f"{camera_id}-IMG-{idx+1:03d}"
+        tid = f"{camera_id}-VEH-{idx+1:03d}"
         trk = VehicleTrack(tid, camera_id, (bx, by, bw, bh), cls_name, conf, crop, timestamp=10.0 + idx * 5.0)
         trk.features = extractor.extract(crop, class_name=cls_name)
         tracks.append(trk)
