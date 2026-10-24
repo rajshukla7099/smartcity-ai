@@ -1,7 +1,7 @@
 """
-MultiCam AI — 1-Click Public Host Runner for VS Code
-Launches local Streamlit server and creates a public HTTPS internet tunnel.
-Anyone with internet can access the dashboard on their phone/laptop!
+MultiCam AI — Direct Public Cloudflare Tunnel Runner (Zero Password)
+Creates an instant, direct public HTTPS link on trycloudflare.com.
+Zero password required! Anyone can open it directly on their phone or laptop.
 """
 
 import sys
@@ -10,22 +10,17 @@ import time
 import subprocess
 import urllib.request
 import webbrowser
+import re
 
 PORT = 8501
-
-def get_public_ip():
-    try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=4) as resp:
-            return resp.read().decode("utf-8").strip()
-    except Exception:
-        return "115.248.83.149"
+CLOUDFLARED_EXE = os.path.abspath("cloudflared.exe")
 
 def ensure_streamlit_running():
-    print("[1/3] Checking local MultiCam AI Streamlit server...")
+    print("[1/2] Checking local MultiCam AI Streamlit server...")
     try:
         with urllib.request.urlopen(f"http://localhost:{PORT}", timeout=1) as resp:
             if resp.status == 200:
-                print("  ✓ Local Streamlit dashboard is already active on port 8501.")
+                print("  ✓ Local Streamlit dashboard is active on port 8501.")
                 return None
     except Exception:
         pass
@@ -43,16 +38,15 @@ def ensure_streamlit_running():
     print("  ✓ Local Streamlit server started.")
     return proc
 
-def start_public_tunnel():
-    ip = get_public_ip()
-    print("\n[2/3] Fetching tunnel authentication...")
-    print(f"  🔑 Verification Password (IP): {ip}")
-    print("     (Enter this IP when prompted on the tunnel website)")
-
-    print("\n[3/3] Creating Public HTTPS Internet Tunnel...")
+def start_cloudflare_tunnel():
+    print("\n[2/2] Launching Direct Public HTTPS Tunnel (Zero Password)...")
     print("=" * 75)
 
-    cmd = ["cmd", "/c", "npx", "--yes", "localtunnel", "--port", str(PORT)]
+    if not os.path.exists(CLOUDFLARED_EXE):
+        print("[!] Error: cloudflared.exe not found in directory.")
+        return
+
+    cmd = [CLOUDFLARED_EXE, "tunnel", "--url", f"http://localhost:{PORT}"]
     tunnel_proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -62,40 +56,37 @@ def start_public_tunnel():
     )
 
     public_url = None
-    # Read output line-by-line to get the URL
     for line in iter(tunnel_proc.stdout.readline, ""):
         line_str = line.strip()
-        print("  " + line_str)
-        if "your url is:" in line_str.lower():
-            public_url = line_str.split("your url is:")[-1].strip()
+        match = re.search(r"https://[a-zA-Z0-9\-\.]+\.trycloudflare\.com", line_str)
+        if match:
+            public_url = match.group(0)
             break
 
     if public_url:
         print("=" * 75)
-        print(" 🎉 MULTICAM AI IS NOW LIVE ON THE PUBLIC INTERNET!")
-        print(f" 🌐 PUBLIC URL:  {public_url}")
-        print(f" 🔑 PASSWORD:    {ip}")
+        print(" 🎉 MULTICAM AI IS NOW LIVE GLOBALLY (ZERO PASSWORD REQUIRED)!")
+        print(f" 🌐 DIRECT PUBLIC LINK: {public_url}")
         print("=" * 75)
-        print("\n👉 Share this URL with judges so they can open it on their phones!")
-        print("👉 Opening public URL in your browser now...\n")
+        print("\n👉 Send this link to judges — they can open it immediately on their phones!")
+        print("👉 Opening link in your browser now...\n")
         try:
             webbrowser.open(public_url)
         except Exception:
             pass
 
-    # Keep tunnel alive
     try:
         tunnel_proc.wait()
     except KeyboardInterrupt:
         print("\nStopping public tunnel...")
         tunnel_proc.terminate()
         tunnel_proc.wait()
-        print("Public tunnel stopped.")
+        print("Tunnel stopped.")
 
 if __name__ == "__main__":
     st_proc = ensure_streamlit_running()
     try:
-        start_public_tunnel()
+        start_cloudflare_tunnel()
     finally:
         if st_proc is not None:
             st_proc.terminate()

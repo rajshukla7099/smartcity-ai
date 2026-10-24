@@ -23,3 +23,5 @@ detected_output.mp4
 .DS_Store
 Thumbs.db
 .idea/
+
+*.exe
