@@ -24,28 +24,32 @@ class TrafficAnalyticsEngine:
         travel_times = [m["delta_t"] for m in verified_matches if m.get("delta_t")]
         speeds = [m["speed_kmh"] for m in verified_matches if m.get("speed_kmh")]
 
-        avg_travel_time = round(float(np.mean(travel_times)), 1) if travel_times else 55.0
-        median_travel_time = round(float(np.median(travel_times)), 1) if travel_times else 55.0
-        min_travel_time = round(float(np.min(travel_times)), 1) if travel_times else 34.0
-        max_travel_time = round(float(np.max(travel_times)), 1) if travel_times else 85.0
+        avg_travel_time = round(float(np.mean(travel_times)), 1) if travel_times else 0.0
+        median_travel_time = round(float(np.median(travel_times)), 1) if travel_times else 0.0
+        min_travel_time = round(float(np.min(travel_times)), 1) if travel_times else 0.0
+        max_travel_time = round(float(np.max(travel_times)), 1) if travel_times else 0.0
 
-        avg_speed = round(float(np.mean(speeds)), 1) if speeds else 55.0
-        min_speed = round(float(np.min(speeds)), 1) if speeds else 32.0
-        max_speed = round(float(np.max(speeds)), 1) if speeds else 80.0
+        avg_speed = round(float(np.mean(speeds)), 1) if speeds else 0.0
+        min_speed = round(float(np.min(speeds)), 1) if speeds else 0.0
+        max_speed = round(float(np.max(speeds)), 1) if speeds else 0.0
 
         # Flow Rate (scaled to hourly volume)
-        flow_rate_vph = int(num_matches * 60) if num_matches > 0 else total_a * 50
+        flow_rate_vph = int(num_matches * 60) if num_matches > 0 else 0
         match_rate_pct = round((num_matches / total_a) * 100, 1) if total_a > 0 else 0.0
 
         # Congestion Level of Service (LOS)
-        if avg_speed >= 45:
+        if total_a == 0 and total_b == 0:
+            los = "Standby / No Traffic Detected"
+        elif avg_speed >= 45:
             los = "Level A (Free Flow)"
         elif avg_speed >= 30:
             los = "Level B (Moderate Flow)"
         elif avg_speed >= 18:
             los = "Level C (Heavy Flow)"
-        else:
+        elif avg_speed > 0:
             los = "Level D (Congested / Bottleneck)"
+        else:
+            los = "Standby / No Vehicles In Corridor"
 
         # 2. Modal Split across Indian mixed fleet
         modal_counts = {"car": 0, "motorcycle": 0, "auto-rickshaw": 0, "truck": 0, "bus": 0}
@@ -114,6 +118,18 @@ class TrafficAnalyticsEngine:
         id_fp = max(0, len(tracks_b) - id_tp)
         id_fn = max(0, total_gt - id_tp)
 
+        if total_gt == 0 and len(tracks_b) == 0:
+            return {
+                "idf1_score": 0.0,
+                "idf1_percent": 0.0,
+                "night_flow_error_pct": 0.0,
+                "id_tp": 0,
+                "id_fp": 0,
+                "id_fn": 0,
+                "enhancement_status": "No Vehicles Present in Feeds",
+                "noise_robustness": "Idle Standby"
+            }
+
         # IDF1 computation
         denominator = (2 * id_tp + id_fp + id_fn)
         raw_idf1 = (2 * id_tp) / denominator if denominator > 0 else 0.0
@@ -144,6 +160,19 @@ class TrafficAnalyticsEngine:
         Estimate flows through one camera switched off; report the error.
         Uses historical corridor Bayesian transition survival prior (82.5%).
         """
+        if len(tracks_a) == 0 and len(tracks_b) == 0:
+            return {
+                "failed_sensor": failed_camera,
+                "status": "OFFLINE / DISCONNECTED",
+                "active_surviving_sensor": "None (Zero Vehicles in Feeds)",
+                "surviving_detections": 0,
+                "model_applied": "Standby Mode (Zero Traffic)",
+                "estimated_corridor_flow_vph": 0,
+                "ground_truth_benchmark_flow_vph": 0,
+                "estimation_error_pct": 0.0,
+                "recommendation": "No vehicular traffic detected in corridor."
+            }
+
         HISTORICAL_TRANSITION_RATE = 0.825
 
         if failed_camera == "Camera B":
@@ -186,6 +215,18 @@ class TrafficAnalyticsEngine:
         Add a new camera with no labels; report performance.
         Zero-shot unsupervised appearance transfer to Camera C (+1600m downstream).
         """
+        if not tracks_b and not tracks_c:
+            return {
+                "unseen_camera_id": "CAM-03 (Camera C - Junction 6th Ave Outer Ring)",
+                "supervision_level": "Zero Labels / Standby",
+                "distance_from_cam_b_m": corridor_distance_bc,
+                "unseen_precision_pct": 0.0,
+                "unseen_recall_pct": 0.0,
+                "unseen_idf1_pct": 0.0,
+                "mean_confidence_pct": 0.0,
+                "manual_calibration_time": "0 minutes (Fully Automated Domain Adaptation)"
+            }
+
         if not tracks_c:
             # Simulate realistic unseen Camera C tracklets from Camera B cohort
             count_c = max(1, int(len(tracks_b) * 0.85))

@@ -3,6 +3,7 @@ MultiCam AI - Vehicle Detection Engine
 Supports OpenCV DNN YOLO ONNX Deep Learning with robust OpenCV fallback.
 Exclusively detects real vehicles: car, motorcycle, bus, truck, and auto-rickshaw.
 Filters out background noise, shadows, road pavement, and camera flicker.
+Never invents car detections when no vehicles are present.
 """
 
 import os
@@ -76,13 +77,16 @@ class HybridVehicleDetector:
         )
         self.prev_frame_gray = None
 
-    def detect(self, frame, is_night_mode=False):
+    def detect(self, frame, is_night_mode=False, conf_threshold=None):
         """
         Executes vehicle detection on the given frame.
         Exclusively spots real vehicles (car, motorcycle, bus, truck, auto-rickshaw).
+        Returns [] if no vehicles are present. Never invents detections.
         """
         if frame is None or frame.size == 0:
             return []
+
+        conf = float(conf_threshold) if conf_threshold is not None else self.conf_threshold
 
         # Night mode low-light contrast enhancement
         if is_night_mode:
@@ -91,17 +95,19 @@ class HybridVehicleDetector:
         # 1. Primary: YOLO ONNX Deep Learning Engine
         if self.net is not None:
             try:
-                yolo_dets = self._detect_onnx(frame)
-                if yolo_dets is not None and len(yolo_dets) > 0:
-                    return yolo_dets
+                # If YOLO ONNX runs, its detection output is 100% authoritative.
+                # If 0 vehicles are present, it returns [] cleanly.
+                return self._detect_onnx(frame, conf_threshold=conf)
             except Exception:
+                # Fall back only if ONNX inference threw an unexpected runtime exception
                 pass
 
-        # 2. Strict Classical Fallback (Only real vehicles, suppresses asphalt/trees/noise)
-        return self._detect_opencv_strict(frame)
+        # 2. Strict Classical Fallback (Only if neural net model failed to load)
+        return self._detect_opencv_strict(frame, conf_threshold=conf)
 
-    def _detect_onnx(self, frame):
+    def _detect_onnx(self, frame, conf_threshold=None):
         """Deep learning vehicle detection using YOLOv5 ONNX."""
+        conf_thresh = float(conf_threshold) if conf_threshold is not None else self.conf_threshold
         h, w = frame.shape[:2]
         blob = cv2.dnn.blobFromImage(frame, 1/255.0, (640, 640), swapRB=True, crop=False)
         self.net.setInput(blob)
@@ -125,26 +131,31 @@ class HybridVehicleDetector:
 
         for row in output:
             obj_conf = float(row[4])
-            if obj_conf >= self.conf_threshold:
+            if obj_conf >= conf_thresh:
                 class_scores = row[5:]
                 class_id = int(np.argmax(class_scores))
                 score = float(class_scores[class_id])
                 combined_conf = obj_conf * score
 
-                if combined_conf >= self.conf_threshold and class_id in self.vehicle_classes:
+                if combined_conf >= conf_thresh and class_id in self.vehicle_classes:
                     cx, cy, bw, bh = float(row[0]), float(row[1]), float(row[2]), float(row[3])
                     left = int((cx - 0.5 * bw) * x_factor)
                     top = int((cy - 0.5 * bh) * y_factor)
                     width = int(bw * x_factor)
                     height = int(bh * y_factor)
 
-                    # Ensure box stays within frame boundaries
-                    left = max(0, left)
-                    top = max(0, top)
+                    # Validate detection coordinates & bounding box geometry
+                    if width <= 0 or height <= 0:
+                        continue
+                    if left < 0 or top < 0 or left >= w or top >= h:
+                        continue
                     width = min(w - left, width)
                     height = min(h - top, height)
 
-                    if width >= 25 and height >= 20:
+                    # Ensure realistic vehicle dimensions and aspect ratios
+                    aspect = float(width) / float(height)
+                    box_area = width * height
+                    if width >= 20 and height >= 18 and box_area <= 0.85 * (w * h) and 0.25 <= aspect <= 4.0:
                         boxes.append([left, top, width, height])
                         confidences.append(combined_conf)
                         class_ids.append(class_id)
@@ -153,7 +164,7 @@ class HybridVehicleDetector:
             return []
 
         # Non-Maximum Suppression to remove overlapping duplicate boxes
-        indices = cv2.dnn.NMSBoxes(boxes, confidences, self.conf_threshold, 0.45)
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_thresh, 0.45)
         detections = []
 
         indices_list = indices.flatten() if hasattr(indices, "flatten") else indices
@@ -180,38 +191,41 @@ class HybridVehicleDetector:
 
         return detections
 
-    def _detect_opencv_strict(self, frame):
+    def _detect_opencv_strict(self, frame, conf_threshold=None):
         """
-        High-precision classical vehicle detector.
-        Uses high thresholds, edge density, and aspect constraints to reject background noise.
+        High-precision classical vehicle detector fallback.
+        Requires genuine temporal motion difference across frames.
+        Returns [] on single static images or when no moving vehicles exist.
         """
-        detections = []
+        # If no previous frame exists (e.g. single static image), do NOT invent detections
+        if self.prev_frame_gray is None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            self.prev_frame_gray = cv2.GaussianBlur(gray, (5, 5), 0)
+            return []
+
         h, w = frame.shape[:2]
         frame_area = float(h * w)
 
-        # Strict area bounds to ignore small noise and ground textures
-        dynamic_min_area = max(1800, int(0.0035 * frame_area))
+        dynamic_min_area = max(2400, int(0.005 * frame_area))
         dynamic_max_area = int(0.40 * frame_area)
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
-        # 1. Background subtraction (detectShadows=True marks shadows as gray 127)
-        fg_mask = self.bg_subtractor.apply(frame, learningRate=0.015)
-        # Strict threshold to remove shadows (only values 240+ are true moving vehicles)
-        _, fg_thresh = cv2.threshold(fg_mask, 240, 255, cv2.THRESH_BINARY)
-
-        # 2. Inter-frame difference
-        if self.prev_frame_gray is not None and self.prev_frame_gray.shape == gray_blur.shape:
-            frame_diff = cv2.absdiff(gray_blur, self.prev_frame_gray)
-            _, diff_thresh = cv2.threshold(frame_diff, 28, 255, cv2.THRESH_BINARY)
-            motion_mask = cv2.bitwise_and(fg_thresh, diff_thresh)
-        else:
-            motion_mask = fg_thresh
-
+        # 1. Inter-frame difference to ensure REAL motion
+        frame_diff = cv2.absdiff(gray_blur, self.prev_frame_gray)
         self.prev_frame_gray = gray_blur
+        _, diff_thresh = cv2.threshold(frame_diff, 35, 255, cv2.THRESH_BINARY)
 
-        # Morphological operations
+        # If total motion energy is negligible, no vehicle is moving
+        if cv2.countNonZero(diff_thresh) < dynamic_min_area:
+            return []
+
+        # 2. Background subtraction with shadow rejection
+        fg_mask = self.bg_subtractor.apply(frame, learningRate=0.01)
+        _, fg_thresh = cv2.threshold(fg_mask, 245, 255, cv2.THRESH_BINARY)
+        motion_mask = cv2.bitwise_and(fg_thresh, diff_thresh)
+
         kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
         kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         mask_clean = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
@@ -225,22 +239,21 @@ class HybridVehicleDetector:
             if dynamic_min_area <= area <= dynamic_max_area:
                 x, y, bw, bh = cv2.boundingRect(cnt)
                 aspect = float(bw) / float(bh)
-                # Realistic vehicle aspect ratios (0.5 to 3.2)
-                if 0.50 <= aspect <= 3.2 and bw >= 35 and bh >= 30:
+                if 0.50 <= aspect <= 3.2 and bw >= 40 and bh >= 35:
                     raw_boxes.append((x, y, bw, bh, area))
 
         merged_boxes = self._merge_adjacent_boxes(raw_boxes)
+        detections = []
 
         for x, y, bw, bh in merged_boxes:
             crop = frame[max(0, y):min(h, y+bh), max(0, x):min(w, x+bw)]
             if crop.size == 0:
                 continue
 
-            # Verify vehicle edge density (rules out flat road patches and shadow blobs)
             crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-            edges = cv2.Canny(crop_gray, 50, 150)
+            edges = cv2.Canny(crop_gray, 60, 160)
             edge_density = float(np.count_nonzero(edges)) / float(bw * bh)
-            if edge_density < 0.04:  # Flat texture without vehicle structure
+            if edge_density < 0.05:
                 continue
 
             aspect_ratio = float(bw) / float(bh)

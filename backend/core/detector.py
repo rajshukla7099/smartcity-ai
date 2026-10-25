@@ -26,57 +26,34 @@ class VehicleDetector:
     def __init__(self, min_area=1200, max_area=95000):
         self.min_area = min_area
         self.max_area = max_area
-        self.bg_subtractor = cv2.createBackgroundSubtractorMOG2(
-            history=200,
-            varThreshold=36,
-            detectShadows=True
-        )
+        try:
+            import sys, os
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+            from src.detection.detector import HybridVehicleDetector
+            self.hybrid_detector = HybridVehicleDetector()
+        except Exception:
+            self.hybrid_detector = None
 
     def detect_in_frame(self, frame_bgr):
         """
-        Detects vehicle candidate regions in a single frame.
-        Returns a list of dicts: [{'bbox': (x, y, w, h), 'crop': bgr_img, 'features': {...}}]
+        Detects actual vehicles in a single frame using deep learning YOLO.
+        Returns [] if no vehicles are present. Never invents detections.
         """
         if frame_bgr is None or frame_bgr.size == 0:
             return []
 
-        fg_mask = self.bg_subtractor.apply(frame_bgr)
-        # Filter out shadows (shadows are marked as 127 in MOG2)
-        _, thresh = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
-
-        # Morphological noise removal
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-        cleaned = cv2.dilate(cleaned, kernel, iterations=1)
-
-        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        detections = []
-
-        h_img, w_img = frame_bgr.shape[:2]
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if self.min_area <= area <= self.max_area:
-                x, y, w, h = cv2.boundingRect(cnt)
-                # Aspect ratio filter for realistic vehicle silhouettes
-                aspect = float(w) / float(h)
-                if 0.5 <= aspect <= 3.5:
-                    # Clip boundaries
-                    x1 = max(0, x)
-                    y1 = max(0, y)
-                    x2 = min(w_img, x + w)
-                    y2 = min(h_img, y + h)
-
-                    crop = frame_bgr[y1:y2, x1:x2].copy()
-                    features = extract_vehicle_features(crop)
-                    if features:
-                        detections.append({
-                            "bbox": (x1, y1, x2 - x1, y2 - y1),
-                            "crop": crop,
-                            "features": features
-                        })
-
-        return detections
+        if self.hybrid_detector is not None:
+            dets = self.hybrid_detector.detect(frame_bgr)
+            detections = []
+            for d in dets:
+                features = extract_vehicle_features(d.crop)
+                detections.append({
+                    "bbox": d.bbox,
+                    "crop": d.crop,
+                    "features": features
+                })
+            return detections
+        return []
 
 
 def annotate_frame(frame_bgr, active_tracklets, camera_id="CAM-A", timestamp_str="14:02:15"):

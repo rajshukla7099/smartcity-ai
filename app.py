@@ -610,6 +610,8 @@ with tabs[0]:
                                 v_col = trk.features.get("dominant_color", "Unknown") if trk.features else "Unknown"
                                 st.markdown(f"**`{trk.track_id}`**")
                                 st.caption(f"🏷️ **{v_name}**\n\n🎨 `{v_col}` &bull; Conf: {trk.confidence*100:.0f}%")
+                    else:
+                        st.info("ℹ️ No vehicles detected in this image.")
 
     else:
         # VIDEO MODE
@@ -951,7 +953,10 @@ with tabs[1]:
                 st.session_state.analytics_result = analytics_res
                 st.session_state.processed = True
 
-                st.success(f"✓ Detected {len(tracks_a)} vehicles in Photo A & {len(tracks_b)} in Photo B. Found {len(verified_matches)} Cross-Camera matches! Check Tab 3 to inspect pairings.")
+                if len(tracks_a) == 0 and len(tracks_b) == 0:
+                    st.info("ℹ️ No vehicles detected in either Camera A or Camera B photos.")
+                else:
+                    st.success(f"✓ Detected {len(tracks_a)} vehicles in Photo A & {len(tracks_b)} in Photo B. Found {len(verified_matches)} Cross-Camera matches! Check Tab 3 to inspect pairings.")
 
     else:
         # MULTI-CAMERA VIDEO MODE
@@ -1017,7 +1022,10 @@ with tabs[1]:
                 st.session_state.analytics_result = analytics_res
                 st.session_state.processed = True
 
-                st.success(f"✓ Processed Camera A ({len(tracks_a)} tracklets) & Camera B ({len(tracks_b)} tracklets). Found {len(verified_matches)} primary Re-ID matches!")
+                if len(tracks_a) == 0 and len(tracks_b) == 0:
+                    st.info("ℹ️ No vehicles detected in Camera A or Camera B video streams.")
+                else:
+                    st.success(f"✓ Processed Camera A ({len(tracks_a)} tracklets) & Camera B ({len(tracks_b)} tracklets). Found {len(verified_matches)} primary Re-ID matches!")
 
     if st.session_state.processed:
         col_disp_a, col_disp_b = st.columns(2)
@@ -1026,6 +1034,8 @@ with tabs[1]:
 
         with col_disp_a:
             st.markdown(f"#### 📷 Camera A — Junction 4th Ave ({len(tracks_a)} Vehicles)")
+            if not tracks_a:
+                st.info("No vehicles detected in Camera A feed.")
             for t in tracks_a[:4]:
                 c_img, c_meta = st.columns([1, 2])
                 with c_img:
@@ -1041,6 +1051,8 @@ with tabs[1]:
 
         with col_disp_b:
             st.markdown(f"#### 📷 Camera B — Junction 5th Ave (+850m) ({len(tracks_b)} Vehicles)")
+            if not tracks_b:
+                st.info("No vehicles detected in Camera B feed.")
             for t in tracks_b[:4]:
                 c_img, c_meta = st.columns([1, 2])
                 with c_img:
@@ -1350,17 +1362,18 @@ with tabs[3]:
         # Chart 2: Travel Times Distribution
         with col_chart2:
             st.markdown("#### Travel Time Distribution (seconds)")
-            travel_times = [m["delta_t"] for m in st.session_state.reid_matches if m["is_primary"]]
-            if not travel_times:
-                travel_times = [52.0, 55.4, 58.1, 61.2, 54.0]
-            fig_hist = px.histogram(
-                x=travel_times,
-                nbins=8,
-                labels={"x": "Transit Travel Time (seconds)", "y": "Frequency"},
-                color_discrete_sequence=["#d4af37"]
-            )
-            fig_hist.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, paper_bgcolor='rgba(0,0,0,0)', font_color="#e2e8f0")
-            st.plotly_chart(fig_hist, use_container_width=True)
+            travel_times = [m["delta_t"] for m in st.session_state.reid_matches if m.get("is_primary")]
+            if travel_times:
+                fig_hist = px.histogram(
+                    x=travel_times,
+                    nbins=8,
+                    labels={"x": "Transit Travel Time (seconds)", "y": "Frequency"},
+                    color_discrete_sequence=["#d4af37"]
+                )
+                fig_hist.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=300, paper_bgcolor='rgba(0,0,0,0)', font_color="#e2e8f0")
+                st.plotly_chart(fig_hist, use_container_width=True)
+            else:
+                st.info("No cross-camera vehicle travel times recorded yet.")
 
         st.markdown("#### Origin-Destination (O-D) Movement Ledger")
         st.dataframe(res["od_matrix"], use_container_width=True)
@@ -1374,33 +1387,24 @@ with tabs[3]:
             if vname and vname != "Unknown":
                 model_counts[vname] = model_counts.get(vname, 0) + 1
 
-        if not model_counts:
-            model_counts = {
-                "Maruti Suzuki Dzire": 16,
-                "Hyundai Creta": 12,
-                "Bajaj RE Compact": 18,
-                "Hero Splendor Plus": 15,
-                "Tata Nexon": 9,
-                "Toyota Innova Crysta": 6,
-                "Tata Starbus Ultra": 4,
-                "Ashok Leyland Ecomet": 3
-            }
-
-        mm_df = pd.DataFrame([
-            {"Vehicle Make & Model": k, "Observed Fleet Count": v}
-            for k, v in sorted(model_counts.items(), key=lambda x: x[1], reverse=True)
-        ])
-        fig_mm = px.bar(
-            mm_df, x="Vehicle Make & Model", y="Observed Fleet Count",
-            color="Observed Fleet Count", 
-            color_continuous_scale=[[0, "#2c2411"], [0.5, "#c5a059"], [1, "#fce79f"]], 
-            text_auto=True
-        )
-        fig_mm.update_layout(
-            margin=dict(t=10, b=10, l=10, r=10), height=320,
-            paper_bgcolor='rgba(0,0,0,0)', font_color="#e2e8f0", coloraxis_showscale=False
-        )
-        st.plotly_chart(fig_mm, use_container_width=True)
+        if model_counts:
+            mm_df = pd.DataFrame([
+                {"Vehicle Make & Model": k, "Observed Fleet Count": v}
+                for k, v in sorted(model_counts.items(), key=lambda x: x[1], reverse=True)
+            ])
+            fig_mm = px.bar(
+                mm_df, x="Vehicle Make & Model", y="Observed Fleet Count",
+                color="Observed Fleet Count", 
+                color_continuous_scale=[[0, "#2c2411"], [0.5, "#c5a059"], [1, "#fce79f"]], 
+                text_auto=True
+            )
+            fig_mm.update_layout(
+                margin=dict(t=10, b=10, l=10, r=10), height=320,
+                paper_bgcolor='rgba(0,0,0,0)', font_color="#e2e8f0", coloraxis_showscale=False
+            )
+            st.plotly_chart(fig_mm, use_container_width=True)
+        else:
+            st.info("No vehicle make/model observations recorded yet.")
 
 
 # ==============================================================================
@@ -1410,9 +1414,9 @@ with tabs[4]:
     st.markdown("### 🌙 Night Footage Performance & IDF1 Benchmark")
     st.caption("Measures vehicle Re-ID identification (IDF1) and flow estimation error under dark surveillance conditions, comparing raw low-lux vs. CLAHE contrast enhancement.")
 
-    tracks_a = st.session_state.cam_a_tracks or [1, 2, 3, 4, 5]
-    tracks_b = st.session_state.cam_b_tracks or [1, 2, 3, 4]
-    verified_matches = [m for m in st.session_state.reid_matches if m.get("is_primary", True)] or [1, 2, 3]
+    tracks_a = st.session_state.cam_a_tracks
+    tracks_b = st.session_state.cam_b_tracks
+    verified_matches = [m for m in st.session_state.reid_matches if m.get("is_primary", True)]
 
     col_n_ctrl, col_n_metrics = st.columns([3, 7])
 
@@ -1495,8 +1499,8 @@ with tabs[5]:
 
     with col_sim_res:
         if run_sim or st.session_state.processed:
-            tracks_a = st.session_state.cam_a_tracks or [1, 2, 3, 4, 5]
-            tracks_b = st.session_state.cam_b_tracks or [1, 2, 3, 4]
+            tracks_a = st.session_state.cam_a_tracks
+            tracks_b = st.session_state.cam_b_tracks
             selected_cam_code = "Camera B" if "Camera B" in failed_cam else "Camera A"
 
             sim_out = st.session_state.analytics_engine.simulate_camera_failure(
@@ -1535,7 +1539,7 @@ with tabs[6]:
     st.markdown("### 📡 Unseen Camera C Zero-Shot Evaluation")
     st.caption("Evaluates a newly added downstream traffic camera with zero human annotations or manual calibration.")
 
-    tracks_b = st.session_state.cam_b_tracks or [1, 2, 3, 4, 5]
+    tracks_b = st.session_state.cam_b_tracks
     corridor_bc = st.slider("Downstream Distance from Camera B (meters)", min_value=300.0, max_value=2500.0, value=750.0, step=50.0)
 
     unseen_eval = st.session_state.analytics_engine.evaluate_unseen_camera(tracks_b, corridor_distance_bc=corridor_bc)

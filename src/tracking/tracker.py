@@ -129,8 +129,21 @@ class MultiObjectTracker:
         """
         Updates tracks with detections for the current frame.
         detections: list of VehicleDetection
+        Returns ONLY the tracks that have an actual detection in this frame.
+        Never reuses stale detections from previous frames when no vehicle is detected.
         """
+        if not detections:
+            # Mark all active tracks as missed for this frame
+            for trk in self.tracks:
+                if trk.is_active:
+                    trk.mark_missed()
+                    if trk.missed_frames > self.max_missed_frames:
+                        trk.is_active = False
+            # Current frame has 0 vehicle detections
+            return []
+
         active_tracks = [t for t in self.tracks if t.is_active]
+        current_frame_tracks = []
 
         if not active_tracks:
             # All detections start new tracks
@@ -139,7 +152,8 @@ class MultiObjectTracker:
                 self.next_id += 1
                 t = VehicleTrack(tid, self.camera_id, det.bbox, det.class_name, det.confidence, det.crop, timestamp)
                 self.tracks.append(t)
-            return self.get_active_tracks()
+                current_frame_tracks.append(t)
+            return current_frame_tracks
 
         # Build affinity matrix combining IoU, motion prediction and centroid distance
         matched_track_indices = set()
@@ -162,6 +176,7 @@ class MultiObjectTracker:
                 active_tracks[best_t_idx].update(det.bbox, det.confidence, det.crop, timestamp)
                 matched_track_indices.add(best_t_idx)
                 matched_det_indices.add(d_idx)
+                current_frame_tracks.append(active_tracks[best_t_idx])
 
         # Mark unmatched active tracks as missed
         for t_idx, trk in enumerate(active_tracks):
@@ -177,11 +192,14 @@ class MultiObjectTracker:
                 self.next_id += 1
                 t = VehicleTrack(tid, self.camera_id, det.bbox, det.class_name, det.confidence, det.crop, timestamp)
                 self.tracks.append(t)
+                current_frame_tracks.append(t)
 
-        return self.get_active_tracks()
+        return current_frame_tracks
 
     def get_active_tracks(self):
+        """Returns all currently active tracks."""
         return [t for t in self.tracks if t.is_active]
 
-    def get_all_completed_tracks(self):
-        return self.tracks
+    def get_all_completed_tracks(self, min_observations=1):
+        """Returns all completed tracks that met the minimum observation requirement."""
+        return [t for t in self.tracks if len(t.bboxes) >= min_observations]

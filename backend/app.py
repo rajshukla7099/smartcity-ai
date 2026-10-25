@@ -473,14 +473,6 @@ def analyze_uploaded_media():
     dets_a = detector.detect_in_frame(img_a)
     dets_b = detector.detect_in_frame(img_b)
 
-    # Fallback to lower threshold if minimal detections
-    if len(dets_a) == 0:
-        detector_relaxed = VehicleDetector(min_area=600)
-        dets_a = detector_relaxed.detect_in_frame(img_a)
-    if len(dets_b) == 0:
-        detector_relaxed = VehicleDetector(min_area=600)
-        dets_b = detector_relaxed.detect_in_frame(img_b)
-
     # Convert detections to tracklets
     tracklets_a = []
     for idx, d in enumerate(dets_a):
